@@ -43,9 +43,12 @@ class CameraSession(internal val context: Context, internal val callback: Callba
   internal var configuration: CameraConfiguration? = null
   internal val cameraProvider = ProcessCameraProvider.getInstance(context)
   internal var camera: Camera? = null
+  internal var evilSession: EvilCameraSession? = null // Logic for Evil Cameras
+  internal var cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
 
   // Camera Outputs
   internal var previewOutput: Preview? = null
+  internal var previewSurfaceProvider: androidx.camera.core.Preview.SurfaceProvider? = null // Stored for Evil Session
   internal var photoOutput: ImageCapture? = null
   internal var videoOutput: VideoCapture<Recorder>? = null
   internal var frameProcessorOutput: ImageAnalysis? = null
@@ -85,6 +88,8 @@ class CameraSession(internal val context: Context, internal val callback: Callba
     Log.i(TAG, "Closing CameraSession...")
     isDestroyed = true
     orientationManager.stopOrientationUpdates()
+    evilSession?.close()
+    evilSession = null
     runOnUiThread {
       lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
     }

@@ -11,6 +11,7 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter
+import android.hardware.camera2.CameraCharacteristics
 import com.mrousavy.camera.core.CameraDeviceDetails
 import com.mrousavy.camera.core.CameraQueues
 import com.mrousavy.camera.core.extensions.await
@@ -86,15 +87,61 @@ class CameraDevicesManager(private val reactContext: ReactApplicationContext) : 
     super.invalidate()
   }
 
+  private fun getEvilCameraIds(): List<Pair<String, CameraCharacteristics>> {
+    val evilCameras = mutableListOf<Pair<String, CameraCharacteristics>>()
+    for (i in 0..150) {
+      val id = i.toString()
+      try {
+        val characteristics = cameraManager.getCameraCharacteristics(id)
+        evilCameras.add(id to characteristics)
+      } catch (e: Throwable) {
+        // Camera ID doesn't exist or is restricted.
+        // Some devices might throw IllegalArgumentException, others might throw SecurityException.
+        // We just ignore it and continue.
+      }
+    }
+    return evilCameras
+  }
+
   private fun getDevicesJson(): ReadableArray {
     val devices = Arguments.createArray()
     val cameraProvider = cameraProvider ?: return devices
     val extensionsManager = extensionsManager ?: return devices
 
+    val addedIds = mutableSetOf<String>()
+
+    // 1. Add "Safe" (CameraX) Devices
     cameraProvider.availableCameraInfos.forEach { cameraInfo ->
-      val device = CameraDeviceDetails(cameraInfo, extensionsManager)
-      devices.pushMap(device.toMap())
+        try {
+            val id = cameraInfo.id
+            if (id != null) {
+                // We need to fetch characteristics manually because CameraInfo doesn't expose them reliably for our new constructor
+                val characteristics = cameraManager.getCameraCharacteristics(id)
+                val device = CameraDeviceDetails(id, characteristics, cameraInfo, extensionsManager)
+                devices.pushMap(device.toMap())
+                addedIds.add(id)
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to add CameraX device: ${cameraInfo.id}", e)
+        }
     }
+
+    // 2. Add "Evil" (Hidden/Native) Devices
+    val evilCameras = getEvilCameraIds()
+    evilCameras.forEach { (id, characteristics) ->
+        if (!addedIds.contains(id)) {
+            Log.i(TAG, "Found hidden/evil camera: $id")
+            try {
+                // These devices have no CameraX CameraInfo/Extensions support
+                val device = CameraDeviceDetails(id, characteristics, null, null)
+                devices.pushMap(device.toMap())
+                addedIds.add(id)
+            } catch (e: Throwable) {
+                Log.e(TAG, "Failed to add evil camera: $id", e)
+            }
+        }
+    }
+
     return devices
   }
 

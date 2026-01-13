@@ -36,38 +36,43 @@ import kotlin.math.sqrt
 
 @SuppressLint("RestrictedApi")
 @Suppress("FoldInitializerAndIfToElvis")
-class CameraDeviceDetails(private val cameraInfo: CameraInfo, extensionsManager: ExtensionsManager) {
+class CameraDeviceDetails(
+  private val cameraId: String,
+  private val characteristics: CameraCharacteristics,
+  private val cameraInfo: CameraInfo? = null,
+  extensionsManager: ExtensionsManager? = null
+) {
   companion object {
     private const val TAG = "CameraDeviceDetails"
   }
 
   // Generic props available on all implementations
-  private val cameraId = cameraInfo.id ?: throw NoCameraDeviceError()
-  private val position = Position.fromLensFacing(cameraInfo.lensFacing)
-  private val name = "$cameraId ($position) ${cameraInfo.implementationType}"
-  private val hasFlash = cameraInfo.hasFlashUnit()
-  private val minZoom = cameraInfo.zoomState.value?.minZoomRatio ?: 0f
-  private val maxZoom = cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
-  private val minExposure = cameraInfo.exposureState.exposureCompensationRange.lower
-  private val maxExposure = cameraInfo.exposureState.exposureCompensationRange.upper
+  // Generic props available on all implementations
+  private val position = Position.fromLensFacing(cameraInfo?.lensFacing ?: characteristics.get(CameraCharacteristics.LENS_FACING)!!)
+  private val name = "$cameraId ($position) ${cameraInfo?.implementationType ?: "EVIL_CAMERA2"}"
+  private val hasFlash = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+  private val minZoom = cameraInfo?.zoomState?.value?.minZoomRatio ?: characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MIN_ZOOM_RATIOS)?.get(0) ?: 1f
+  private val maxZoom = cameraInfo?.zoomState?.value?.maxZoomRatio ?: characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+  private val minExposure = cameraInfo?.exposureState?.exposureCompensationRange?.lower ?: characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)?.lower ?: 0
+  private val maxExposure = cameraInfo?.exposureState?.exposureCompensationRange?.upper ?: characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)?.upper ?: 0
   private val supportsFocus = getSupportsFocus()
   private val supportsRawCapture = false
   private val supportsDepthCapture = false
   private val autoFocusSystem = if (supportsFocus) AutoFocusSystem.CONTRAST_DETECTION else AutoFocusSystem.NONE
-  private val previewCapabilities = PreviewCapabilitiesImpl.from(cameraInfo)
-  private val videoCapabilities = Recorder.getVideoCapabilities(cameraInfo, Recorder.VIDEO_CAPABILITIES_SOURCE_CAMCORDER_PROFILE)
+  private val previewCapabilities = if (cameraInfo != null) PreviewCapabilitiesImpl.from(cameraInfo) else null
+  private val videoCapabilities = if (cameraInfo != null) Recorder.getVideoCapabilities(cameraInfo, Recorder.VIDEO_CAPABILITIES_SOURCE_CAMCORDER_PROFILE) else null
   private val supports10BitHdr = getSupports10BitHDR()
-  private val sensorRotationDegrees = cameraInfo.sensorRotationDegrees
+  private val sensorRotationDegrees = cameraInfo?.sensorRotationDegrees ?: characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
   private val sensorOrientation = Orientation.fromRotationDegrees(sensorRotationDegrees)
 
   // CameraX internal props
-  private val cameraInfoInternal = cameraInfo as CameraInfoInternal
+  private val cameraInfoInternal = cameraInfo as? CameraInfoInternal
 
   // Camera2 specific props
   private val camera2Details = cameraInfo as? Camera2CameraInfoImpl
-  private val physicalDeviceIds = camera2Details?.cameraCharacteristicsMap?.keys ?: emptySet()
+  private val physicalDeviceIds = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) characteristics.physicalCameraIds else emptySet()
   private val isMultiCam = physicalDeviceIds.size > 1
-  private val cameraHardwareLevel = camera2Details?.cameraCharacteristicsCompat?.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+  private val cameraHardwareLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
   private val hardwareLevel = HardwareLevel.fromCameraHardwareLevel(
     cameraHardwareLevel ?: CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY
   )
@@ -76,8 +81,8 @@ class CameraDeviceDetails(private val cameraInfo: CameraInfo, extensionsManager:
   private val maxFieldOfView = getMaxFieldOfView()
 
   // Extensions
-  private val supportsHdrExtension = extensionsManager.isExtensionAvailable(cameraInfo.cameraSelector, ExtensionMode.HDR)
-  private val supportsLowLightBoostExtension = extensionsManager.isExtensionAvailable(cameraInfo.cameraSelector, ExtensionMode.NIGHT)
+  private val supportsHdrExtension = if (extensionsManager != null && cameraInfo != null) extensionsManager.isExtensionAvailable(cameraInfo.cameraSelector, ExtensionMode.HDR) else false
+  private val supportsLowLightBoostExtension = if (extensionsManager != null && cameraInfo != null) extensionsManager.isExtensionAvailable(cameraInfo.cameraSelector, ExtensionMode.NIGHT) else false
 
   fun toMap(): ReadableMap {
     val deviceTypes = getDeviceTypes()
@@ -115,6 +120,37 @@ class CameraDeviceDetails(private val cameraInfo: CameraInfo, extensionsManager:
   private fun getFormats(): ReadableArray {
     val array = Arguments.createArray()
 
+    if (videoCapabilities == null || cameraInfoInternal == null) {
+      // Fallback for Evil Cameras (No CameraX capabilities)
+      val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return array
+      val outputSizes = map.getOutputSizes(ImageFormat.JPEG) ?: emptyArray()
+      
+      outputSizes.forEach { size ->
+        val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+        val minFps = fpsRanges.minOfOrNull { it.lower } ?: 0
+        val maxFps = fpsRanges.maxOfOrNull { it.upper } ?: 30
+        
+        val formatMap = Arguments.createMap()
+        formatMap.putInt("photoHeight", size.height)
+        formatMap.putInt("photoWidth", size.width)
+        formatMap.putInt("videoHeight", size.height)
+        formatMap.putInt("videoWidth", size.width)
+        formatMap.putInt("minFps", minFps)
+        formatMap.putInt("maxFps", maxFps)
+        formatMap.putInt("minISO", isoRange.lower)
+        formatMap.putInt("maxISO", isoRange.upper)
+        formatMap.putDouble("fieldOfView", maxFieldOfView)
+        formatMap.putBoolean("supportsVideoHdr", false)
+        formatMap.putBoolean("supportsPhotoHdr", false)
+        formatMap.putBoolean("supportsDepthCapture", false)
+        formatMap.putString("autoFocusSystem", autoFocusSystem.unionValue)
+        formatMap.putArray("videoStabilizationModes", createStabilizationModes())
+        
+        array.pushMap(formatMap)
+      }
+      return array
+    }
+
     val dynamicRangeProfiles = videoCapabilities.supportedDynamicRanges
 
     dynamicRangeProfiles.forEach { dynamicRange ->
@@ -125,7 +161,7 @@ class CameraDeviceDetails(private val cameraInfo: CameraInfo, extensionsManager:
           cameraInfoInternal.getSupportedHighResolutions(ImageFormat.JPEG) union
             cameraInfoInternal.getSupportedResolutions(ImageFormat.JPEG)
           ).toList()
-        val fpsRanges = cameraInfo.supportedFrameRateRanges
+        val fpsRanges = cameraInfo!!.supportedFrameRateRanges
         val minFps = fpsRanges.minOf { it.lower }
         val maxFps = fpsRanges.maxOf { it.upper }
 
@@ -177,24 +213,24 @@ class CameraDeviceDetails(private val cameraInfo: CameraInfo, extensionsManager:
   }
 
   private fun getSupports10BitHDR(): Boolean =
-    videoCapabilities.supportedDynamicRanges.any { range ->
+    videoCapabilities?.supportedDynamicRanges?.any { range ->
       range.is10BitHdr || range == DynamicRange.HDR_UNSPECIFIED_10_BIT
-    }
+    } ?: false
 
   private fun getSupportsFocus(): Boolean {
-    val point = SurfaceOrientedMeteringPointFactory(1.0f, 1.0f).createPoint(0.5f, 0.5f)
-    val action = FocusMeteringAction.Builder(point)
-    return cameraInfo.isFocusMeteringSupported(action.build())
+    // If we have CameraX info, use it
+    if (cameraInfo != null) {
+      val point = SurfaceOrientedMeteringPointFactory(1.0f, 1.0f).createPoint(0.5f, 0.5f)
+      val action = FocusMeteringAction.Builder(point)
+      return cameraInfo.isFocusMeteringSupported(action.build())
+    }
+    // Fallback: check characteristics
+    val minFocusDistance = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+    return minFocusDistance != null && minFocusDistance > 0
   }
 
   private fun getMinFocusDistanceCm(): Double {
-    val device = cameraInfo as? Camera2CameraInfoImpl
-    if (device == null) {
-      // Device is not a Camera2 device.
-      return 0.0
-    }
-
-    val distance = device.cameraCharacteristicsCompat.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+    val distance = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
     if (distance == null || distance == 0f) return 0.0
     if (distance.isNaN() || distance.isInfinite()) return 0.0
     // distance is in "diopters", meaning 1/meter. Convert to meters, then centi-meters
@@ -202,22 +238,16 @@ class CameraDeviceDetails(private val cameraInfo: CameraInfo, extensionsManager:
   }
 
   private fun getIsoRange(): Range<Int> {
-    val device = cameraInfo as? Camera2CameraInfoImpl
-    if (device == null) {
-      // Device is not a Camera2 device.
-      return Range(0, 0)
-    }
-
-    val range = device.cameraCharacteristicsCompat.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+    val range = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
     return range ?: Range(0, 0)
   }
 
   private fun createStabilizationModes(): ReadableArray {
     val modes = mutableSetOf(VideoStabilizationMode.OFF)
-    if (videoCapabilities.isStabilizationSupported) {
+    if (videoCapabilities != null && videoCapabilities.isStabilizationSupported) {
       modes.add(VideoStabilizationMode.CINEMATIC)
     }
-    if (previewCapabilities.isStabilizationSupported) {
+    if (previewCapabilities != null && previewCapabilities.isStabilizationSupported) {
       modes.add(VideoStabilizationMode.CINEMATIC_EXTENDED)
     }
 
@@ -230,22 +260,24 @@ class CameraDeviceDetails(private val cameraInfo: CameraInfo, extensionsManager:
 
   private fun getDeviceTypes(): List<DeviceType> {
     val defaultList = listOf(DeviceType.WIDE_ANGLE)
-    val camera2Details = camera2Details ?: return defaultList
 
-    val deviceTypes = camera2Details.cameraCharacteristicsMap.map { (_, characteristics) ->
-      val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: return@map DeviceType.WIDE_ANGLE
-      val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: return@map DeviceType.WIDE_ANGLE
-      val fov = getMaxFieldOfView(focalLengths, sensorSize)
-
-      return@map when {
-        fov > 94 -> DeviceType.ULTRA_WIDE_ANGLE
-        fov in 60f..94f -> DeviceType.WIDE_ANGLE
-        fov < 60f -> DeviceType.TELEPHOTO
-        else -> throw Error("Invalid Field Of View! ($fov)")
-      }
+    // For Evil Camera (native Camera2), we might be able to find physical ids
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P && physicalDeviceIds.isNotEmpty()) {
+      // TODO: Can we get characteristics for physical cameras easily here without CameraX?
+      // For now, return default if we can't easily map physical IDs to types
+      return defaultList
     }
 
-    return deviceTypes
+    val inputSensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: return defaultList
+    val inputFocalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: return defaultList
+    val fov = getMaxFieldOfView(inputFocalLengths, inputSensorSize)
+
+    return when {
+      fov > 94 -> listOf(DeviceType.ULTRA_WIDE_ANGLE)
+      fov in 60f..94f -> listOf(DeviceType.WIDE_ANGLE)
+      fov < 60f -> listOf(DeviceType.TELEPHOTO)
+      else -> defaultList
+    }
   }
 
   private fun getFieldOfView(focalLength: Float, sensorSize: SizeF): Double {
@@ -263,7 +295,6 @@ class CameraDeviceDetails(private val cameraInfo: CameraInfo, extensionsManager:
   }
 
   private fun getMaxFieldOfView(): Double {
-    val characteristics = camera2Details?.cameraCharacteristicsCompat ?: return 0.0
     val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: return 0.0
     val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: return 0.0
     return getMaxFieldOfView(focalLengths, sensorSize)
