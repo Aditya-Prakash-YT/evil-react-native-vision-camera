@@ -4,8 +4,8 @@
 cd package
 
 # 2. Install JS dependencies (ignoring peer dependency conflicts for docs)
-echo "Installing dependencies..."
-npm install --legacy-peer-deps
+# echo "Installing dependencies..."
+# npm install --legacy-peer-deps
 
 # 3. Go to the Android folder
 cd android
