@@ -5,7 +5,8 @@
 # with the Evil Camera modifications.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET_DIR="../../node_modules/react-native-vision-camera"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+TARGET_DIR="$PROJECT_ROOT/node_modules/react-native-vision-camera"
 
 echo "😈 Evil Patcher Starting..."
 echo "Source: $SCRIPT_DIR/android"
@@ -26,6 +27,9 @@ echo "📂 Copying patched files..."
 cp -v "$SCRIPT_DIR/android/src/main/java/com/mrousavy/camera/core/CameraDeviceDetails.kt" "$TARGET_DIR/android/src/main/java/com/mrousavy/camera/core/CameraDeviceDetails.kt"
 cp -v "$SCRIPT_DIR/android/src/main/java/com/mrousavy/camera/core/CameraSession.kt" "$TARGET_DIR/android/src/main/java/com/mrousavy/camera/core/CameraSession.kt"
 cp -v "$SCRIPT_DIR/android/src/main/java/com/mrousavy/camera/core/EvilCameraSession.kt" "$TARGET_DIR/android/src/main/java/com/mrousavy/camera/core/EvilCameraSession.kt"
+cp -v "$SCRIPT_DIR/android/src/main/java/com/mrousavy/camera/core/CameraSession+Photo.kt" "$TARGET_DIR/android/src/main/java/com/mrousavy/camera/core/CameraSession+Photo.kt"
+cp -v "$SCRIPT_DIR/android/src/main/java/com/mrousavy/camera/core/CameraSession+Video.kt" "$TARGET_DIR/android/src/main/java/com/mrousavy/camera/core/CameraSession+Video.kt"
+cp -v "$SCRIPT_DIR/android/src/main/java/com/mrousavy/camera/core/CameraSession+Configuration.kt" "$TARGET_DIR/android/src/main/java/com/mrousavy/camera/core/CameraSession+Configuration.kt"
 
 # React module files
 cp -v "$SCRIPT_DIR/android/src/main/java/com/mrousavy/camera/react/CameraDevicesManager.kt" "$TARGET_DIR/android/src/main/java/com/mrousavy/camera/react/CameraDevicesManager.kt"
